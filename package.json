@@ -1,0 +1,14 @@
+{
+  "name": "@perfops/infracost",
+  "version": "1.0.0",
+  "description": "PerfOps Infracost Terraform Plan Diff & PR Gate Service",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/infracost.test.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
