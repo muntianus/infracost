@@ -29,3 +29,9 @@ node --test tests/infracost.test.js
 # Start HTTP microservice on port 4050
 npm start
 ```
+
+## Contact / Support
+
+PerfOps official Telegram contact: [@perfops_ai_manager](https://t.me/perfops_ai_manager).
+
+For security vulnerabilities, use private vulnerability reporting rather than public Telegram messages.
