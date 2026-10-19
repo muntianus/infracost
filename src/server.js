@@ -90,10 +90,20 @@ export function createInfracostServer() {
     if (req.method === 'POST' && pathname === '/api/v1/estimate') {
       try {
         const body = await readJsonBody(req);
-        const report = analyzeTerraformPlan(body, {
+        const strictQuery = String(parsedUrl.searchParams.get('strictUnknown') || '').toLowerCase();
+        const strictUnknown =
+          body.strictUnknown === true ||
+          strictQuery === '1' ||
+          strictQuery === 'true';
+        const analyzeOptions = {
           usdToRub: body.usdToRub,
           thresholds: body.thresholds,
-        });
+          unknownHourlyUsd: body.unknownHourlyUsd,
+        };
+        if (strictUnknown) {
+          analyzeOptions.strictUnknown = true;
+        }
+        const report = analyzeTerraformPlan(body, analyzeOptions);
         sendJson(res, 200, report);
       } catch (err) {
         sendJson(res, 400, { error: err.message });
