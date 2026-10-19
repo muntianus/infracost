@@ -6,6 +6,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node src/server.js",
+    "gate": "node src/cli.js",
     "test": "node --test tests/infracost.test.js"
   },
   "engines": {
