@@ -6,6 +6,33 @@
 export const HOURS_PER_MONTH = 730;
 export const DEFAULT_USD_TO_RUB = 96.5;
 
+/**
+ * Conservative fallback for Terraform resource types that are absent from PRICING_TABLE.
+ * Unknown types must never silently evaluate to $0: the PR gate needs a non-zero signal
+ * so that expensive changes cannot pass unnoticed.
+ */
+export const DEFAULT_UNKNOWN_RESOURCE_HOURLY_USD = 0.05;
+export const UNKNOWN_RESOURCE_HOURLY_ENV = 'INFRACOST_UNKNOWN_RESOURCE_HOURLY';
+
+/**
+ * Resolves the fallback hourly USD rate for unpriced resource types.
+ * Priority: explicit option > INFRACOST_UNKNOWN_RESOURCE_HOURLY > built-in default.
+ * Invalid or non-positive values fall back to the safe default.
+ */
+export function resolveUnknownResourceHourlyUsd(override) {
+  const raw = override ?? process.env[UNKNOWN_RESOURCE_HOURLY_ENV];
+  if (raw === undefined || raw === null || raw === '') {
+    return DEFAULT_UNKNOWN_RESOURCE_HOURLY_USD;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_UNKNOWN_RESOURCE_HOURLY_USD;
+  }
+
+  return parsed;
+}
+
 export const PRICING_TABLE = {
   // AWS Resources
   aws_instance: {
@@ -133,19 +160,36 @@ export const PRICING_TABLE = {
  * Resolves the SKU and monthly/hourly cost for a single Terraform resource descriptor.
  * @param {object} resource - { type, name, sku, instance_type, machine_type, tier, size, allocated_storage, count, multi_az, ... }
  * @param {number} [usdToRub=DEFAULT_USD_TO_RUB]
+ * @param {object} [options] - { unknownHourlyUsd } overrides the conservative fallback rate
  */
-export function lookupResourcePrice(resource = {}, usdToRub = DEFAULT_USD_TO_RUB) {
+export function lookupResourcePrice(resource = {}, usdToRub = DEFAULT_USD_TO_RUB, options = {}) {
   const type = resource.type || resource.resource_type;
   const entry = PRICING_TABLE[type];
+  const count =
+    Number.isFinite(Number(resource.count)) && Number(resource.count) > 0
+      ? Number(resource.count)
+      : 1;
+
   if (!entry) {
+    const fallbackHourlyUsd = resolveUnknownResourceHourlyUsd(options.unknownHourlyUsd);
+    const hourlyUsd = Number((fallbackHourlyUsd * count).toFixed(4));
+    const monthlyUsd = Number((hourlyUsd * HOURS_PER_MONTH).toFixed(2));
+    const monthlyRub = Number((monthlyUsd * usdToRub).toFixed(2));
+
     return {
       type: type || 'unknown',
+      name: resource.name || resource.address || type || 'unknown',
       provider: 'unknown',
-      sku: 'unrecognized',
-      hourlyUsd: 0,
-      monthlyUsd: 0,
-      monthlyRub: 0,
+      category: 'unknown',
+      sku: 'unknown-fallback',
+      count,
+      hourlyUsd,
+      monthlyUsd,
+      monthlyRub,
       supported: false,
+      estimated: true,
+      priceSource: 'fallback-unknown',
+      fallbackHourlyUsd,
     };
   }
 
@@ -161,7 +205,6 @@ export function lookupResourcePrice(resource = {}, usdToRub = DEFAULT_USD_TO_RUB
 
   const skuInfo = entry.skus[rawSku] || entry.skus[entry.defaultSku];
   const resolvedSku = entry.skus[rawSku] ? rawSku : entry.defaultSku;
-  const count = Number.isFinite(Number(resource.count)) && Number(resource.count) > 0 ? Number(resource.count) : 1;
 
   let baseMonthlyUsd = skuInfo.monthlyUsd;
 
@@ -199,6 +242,9 @@ export function lookupResourcePrice(resource = {}, usdToRub = DEFAULT_USD_TO_RUB
     monthlyUsd: totalMonthlyUsd,
     monthlyRub: totalMonthlyRub,
     supported: true,
+    estimated: false,
+    priceSource: 'catalog',
+    fallbackHourlyUsd: null,
   };
 }
 
@@ -212,6 +258,14 @@ export function getFullPricingCatalog(usdToRub = DEFAULT_USD_TO_RUB) {
     usdToRubRate: usdToRub,
     hoursPerMonth: HOURS_PER_MONTH,
     resourceTypes: Object.keys(PRICING_TABLE),
+    unknownResourcePolicy: {
+      envVar: UNKNOWN_RESOURCE_HOURLY_ENV,
+      defaultHourlyUsd: DEFAULT_UNKNOWN_RESOURCE_HOURLY_USD,
+      effectiveHourlyUsd: resolveUnknownResourceHourlyUsd(),
+      gateStatus: 'WARN',
+      strictFlag: '--strict-unknown',
+      strictStatus: 'FAIL',
+    },
     catalog: PRICING_TABLE,
   };
 }
