@@ -6,6 +6,7 @@
  */
 
 import { lookupResourcePrice, DEFAULT_USD_TO_RUB, HOURS_PER_MONTH } from './pricing-db.js';
+import { normalizeTfValues, normalizeTfAction } from './terraform-normalizer.js';
 
 export const DEFAULT_POLICY_THRESHOLDS = {
   warnDeltaUsd: 100,
@@ -13,32 +14,6 @@ export const DEFAULT_POLICY_THRESHOLDS = {
   warnDeltaPct: 15,
   blockDeltaPct: 50,
 };
-
-/**
- * Extracts normalized resource attributes from a Terraform state/change representation.
- */
-function normalizeTfValues(type, name, values) {
-  if (!values || typeof values !== 'object') {
-    return null;
-  }
-  return {
-    type,
-    name,
-    sku: values.sku,
-    instance_type: values.instance_type,
-    instance_class: values.instance_class,
-    machine_type: values.machine_type,
-    tier: values.tier,
-    load_balancer_type: values.load_balancer_type,
-    volume_type: values.volume_type || values.type,
-    size: values.size || values.size_gb,
-    allocated_storage: values.allocated_storage || values.disk_size,
-    multi_az: values.multi_az,
-    availability_type: values.availability_type,
-    monthly_data_gb: values.monthly_data_gb,
-    count: values.count || 1,
-  };
-}
 
 /**
  * Evaluates budget gate status (`PASS`, `WARN`, `BLOCK`) given cost deltas and thresholds.
@@ -145,16 +120,7 @@ export function analyzeTerraformPlan(input = {}, options = {}) {
       const beforeVals = rc.change?.before;
       const afterVals = rc.change?.after;
 
-      let action = 'no-op';
-      if (actions.includes('create') && actions.includes('delete')) {
-        action = 'replace';
-      } else if (actions.includes('create')) {
-        action = 'create';
-      } else if (actions.includes('delete')) {
-        action = 'delete';
-      } else if (actions.includes('update')) {
-        action = 'update';
-      }
+      const action = normalizeTfAction(actions);
 
       const beforeSpec =
         action === 'create' ? null : normalizeTfValues(type, address, beforeVals);

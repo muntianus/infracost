@@ -10,6 +10,7 @@ import {
   evaluateBudgetPolicy,
   generatePrMarkdownComment,
 } from '../src/diff-engine.js';
+import { normalizeTfValues, normalizeTfAction } from '../src/terraform-normalizer.js';
 import { createInfracostServer } from '../src/server.js';
 
 test('pricing-db covers required AWS, GCP, and Hostinger VPS resources', () => {
@@ -126,4 +127,23 @@ test('HTTP server responds to /health, /api/v1/prices, /api/v1/presets/globex-in
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+
+test('Terraform action normalization covers each plan action without changing behavior', () => {
+  assert.equal(normalizeTfAction(['create']), 'create');
+  assert.equal(normalizeTfAction(['delete']), 'delete');
+  assert.equal(normalizeTfAction(['update']), 'update');
+  assert.equal(normalizeTfAction(['delete', 'create']), 'replace');
+  assert.equal(normalizeTfAction(['no-op']), 'no-op');
+});
+
+test('Terraform value normalization is pure and tolerates missing values', () => {
+  assert.equal(normalizeTfValues('aws_instance', 'example', null), null);
+  const source = { instance_type: 'm6i.large', count: 2 };
+  const result = normalizeTfValues('aws_instance', 'example', source);
+  assert.equal(result.type, 'aws_instance');
+  assert.equal(result.instance_type, 'm6i.large');
+  assert.equal(result.count, 2);
+  assert.deepEqual(source, { instance_type: 'm6i.large', count: 2 });
 });
