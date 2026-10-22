@@ -1,0 +1,442 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PerfOps Infracost",
+    "version": "1.0.0",
+    "description": "Terraform plan cost diffing, FinOps budget gate (PASS/WARN/BLOCK) and PR comment generation."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4050",
+      "description": "Local / VPS loopback"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness probe (no dependencies)",
+        "tags": [
+          "ops"
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prices": {
+      "get": {
+        "operationId": "getPricingCatalog",
+        "summary": "Full hourly/monthly pricing catalog (AWS, GCP, Hostinger VPS)",
+        "tags": [
+          "pricing"
+        ],
+        "parameters": [
+          {
+            "name": "usdToRub",
+            "in": "query",
+            "required": false,
+            "description": "USD→RUB rate override; ignored unless a positive number",
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pricing catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingCatalog"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/presets/globex-infra": {
+      "get": {
+        "operationId": "getGlobexInfraPreset",
+        "summary": "Cost of the Globex/PerfOps production topology preset",
+        "tags": [
+          "pricing"
+        ],
+        "parameters": [
+          {
+            "name": "usdToRub",
+            "in": "query",
+            "required": false,
+            "description": "USD→RUB rate override; ignored unless a positive number",
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preset with per-resource costs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfraPreset"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/estimate": {
+      "post": {
+        "operationId": "estimateTerraformPlan",
+        "summary": "Diff a Terraform plan's cost and evaluate the PASS/WARN/BLOCK budget gate",
+        "description": "The body is `terraform show -json` output, so unknown top-level keys are accepted; the listed control fields tune the analysis.",
+        "tags": [
+          "gate"
+        ],
+        "parameters": [
+          {
+            "name": "strictUnknown",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` fails the gate on unknown resource types",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1",
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimateRequest"
+              },
+              "example": {
+                "resource_changes": [
+                  {
+                    "address": "aws_instance.web",
+                    "type": "aws_instance",
+                    "change": {
+                      "actions": [
+                        "create"
+                      ],
+                      "before": null,
+                      "after": {
+                        "instance_type": "t3.medium"
+                      }
+                    }
+                  }
+                ],
+                "thresholds": {
+                  "warnDeltaUsd": 100,
+                  "blockDeltaUsd": 500
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cost diff, policy verdict, PR markdown and JUnit XML",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON or payload over 2 MiB (strict-mode failures are a 200 with policy.status BLOCK)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "service",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          },
+          "service": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Thresholds": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "warnDeltaUsd": {
+            "type": "number"
+          },
+          "blockDeltaUsd": {
+            "type": "number"
+          },
+          "warnDeltaPct": {
+            "type": "number"
+          },
+          "blockDeltaPct": {
+            "type": "number"
+          }
+        }
+      },
+      "ResourceChange": {
+        "type": "object",
+        "required": [
+          "type",
+          "change"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "change": {
+            "type": "object",
+            "properties": {
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "before": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "after": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "EstimateRequest": {
+        "type": "object",
+        "properties": {
+          "resource_changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceChange"
+            }
+          },
+          "strictUnknown": {
+            "type": "boolean"
+          },
+          "usdToRub": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "unknownHourlyUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "policyThresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          }
+        }
+      },
+      "PricingCatalog": {
+        "type": "object",
+        "required": [
+          "currency",
+          "usdToRubRate",
+          "hoursPerMonth",
+          "resourceTypes",
+          "catalog"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "secondaryCurrency": {
+            "type": "string"
+          },
+          "usdToRubRate": {
+            "type": "number"
+          },
+          "hoursPerMonth": {
+            "type": "number"
+          },
+          "resourceTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unknownResourcePolicy": {
+            "type": "object"
+          },
+          "catalog": {
+            "type": "object"
+          }
+        }
+      },
+      "InfraPreset": {
+        "type": "object",
+        "required": [
+          "preset",
+          "summary",
+          "resources"
+        ],
+        "properties": {
+          "preset": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "integrations": {
+            "type": "object"
+          },
+          "summary": {
+            "type": "object"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "EstimateReport": {
+        "type": "object",
+        "required": [
+          "provider",
+          "summary",
+          "policy",
+          "diffItems"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "type": "object"
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "WARN",
+                  "BLOCK"
+                ]
+              },
+              "passed": {
+                "type": "boolean"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "thresholds": {
+                "$ref": "#/components/schemas/Thresholds"
+              }
+            }
+          },
+          "diffItems": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "unknownResources": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "integrations": {
+            "type": "object"
+          },
+          "prMarkdown": {
+            "type": "string"
+          },
+          "junitXml": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
