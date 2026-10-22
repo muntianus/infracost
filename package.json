@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "gate": "node src/cli.js",
-    "test": "node --test tests/infracost.test.js"
+    "test": "node --test tests/*.test.js"
   },
   "engines": {
     "node": ">=20.0.0"

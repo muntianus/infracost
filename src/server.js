@@ -8,13 +8,17 @@ import { URL } from 'node:url';
 import { getFullPricingCatalog, getGlobexInfraPreset } from './pricing-db.js';
 import { analyzeTerraformPlan } from './diff-engine.js';
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    ...CORS_HEADERS,
   });
   res.end(body);
 }
@@ -43,75 +47,78 @@ function readJsonBody(req) {
   });
 }
 
+/** `?usdToRub=` override; ignored unless it is a positive number. */
+function usdToRubParam(url) {
+  const rate = Number(url.searchParams.get('usdToRub'));
+  return Number.isFinite(rate) && rate > 0 ? rate : undefined;
+}
+
+function health(req, res) {
+  sendJson(res, 200, {
+    status: 'ok',
+    service: 'perfops-infracost',
+    version: '1.0.0',
+    integrations: ['finops-cost-agent', 'aco.perfops.shop', 'globex'],
+    timestamp: new Date().toISOString(),
+  });
+}
+
+function prices(req, res, url) {
+  sendJson(res, 200, getFullPricingCatalog(usdToRubParam(url)));
+}
+
+function globexInfraPreset(req, res, url) {
+  sendJson(res, 200, getGlobexInfraPreset(usdToRubParam(url)));
+}
+
+async function estimate(req, res, url) {
+  try {
+    const body = await readJsonBody(req);
+    const strictQuery = String(url.searchParams.get('strictUnknown') || '').toLowerCase();
+    const strictUnknown =
+      body.strictUnknown === true ||
+      strictQuery === '1' ||
+      strictQuery === 'true';
+    const analyzeOptions = {
+      usdToRub: body.usdToRub,
+      thresholds: body.thresholds,
+      unknownHourlyUsd: body.unknownHourlyUsd,
+    };
+    if (strictUnknown) {
+      analyzeOptions.strictUnknown = true;
+    }
+    sendJson(res, 200, analyzeTerraformPlan(body, analyzeOptions));
+  } catch (err) {
+    sendJson(res, 400, { error: err.message });
+  }
+}
+
+/**
+ * Every route the service answers. tests/openapi-contract.test.js keeps this
+ * table and docs/api/openapi.json in lockstep.
+ */
+export const ROUTES = [
+  { method: 'GET', path: '/health', handler: health },
+  { method: 'GET', path: '/api/v1/prices', handler: prices },
+  { method: 'GET', path: '/api/v1/presets/globex-infra', handler: globexInfraPreset },
+  { method: 'POST', path: '/api/v1/estimate', handler: estimate },
+];
+
 export function createInfracostServer() {
   return http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      });
+      res.writeHead(204, CORS_HEADERS);
       res.end();
       return;
     }
 
-    const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-    const pathname = parsedUrl.pathname;
-
-    if (req.method === 'GET' && pathname === '/health') {
-      sendJson(res, 200, {
-        status: 'ok',
-        service: 'perfops-infracost',
-        version: '1.0.0',
-        integrations: ['finops-cost-agent', 'aco.perfops.shop', 'globex'],
-        timestamp: new Date().toISOString(),
-      });
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    const route = ROUTES.find((r) => r.method === req.method && r.path === url.pathname);
+    if (!route) {
+      sendJson(res, 404, { error: `Route ${req.method} ${url.pathname} not found` });
       return;
     }
-
-    if (req.method === 'GET' && pathname === '/api/v1/prices') {
-      const rateParam = Number(parsedUrl.searchParams.get('usdToRub'));
-      const catalog = getFullPricingCatalog(
-        Number.isFinite(rateParam) && rateParam > 0 ? rateParam : undefined
-      );
-      sendJson(res, 200, catalog);
-      return;
-    }
-
-    if (req.method === 'GET' && pathname === '/api/v1/presets/globex-infra') {
-      const rateParam = Number(parsedUrl.searchParams.get('usdToRub'));
-      const preset = getGlobexInfraPreset(
-        Number.isFinite(rateParam) && rateParam > 0 ? rateParam : undefined
-      );
-      sendJson(res, 200, preset);
-      return;
-    }
-
-    if (req.method === 'POST' && pathname === '/api/v1/estimate') {
-      try {
-        const body = await readJsonBody(req);
-        const strictQuery = String(parsedUrl.searchParams.get('strictUnknown') || '').toLowerCase();
-        const strictUnknown =
-          body.strictUnknown === true ||
-          strictQuery === '1' ||
-          strictQuery === 'true';
-        const analyzeOptions = {
-          usdToRub: body.usdToRub,
-          thresholds: body.thresholds,
-          unknownHourlyUsd: body.unknownHourlyUsd,
-        };
-        if (strictUnknown) {
-          analyzeOptions.strictUnknown = true;
-        }
-        const report = analyzeTerraformPlan(body, analyzeOptions);
-        sendJson(res, 200, report);
-      } catch (err) {
-        sendJson(res, 400, { error: err.message });
-      }
-      return;
-    }
-
-    sendJson(res, 404, { error: `Route ${req.method} ${pathname} not found` });
+    await route.handler(req, res, url);
   });
 }
 

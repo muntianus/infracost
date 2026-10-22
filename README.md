@@ -44,11 +44,22 @@ Percentage thresholds are skipped when the baseline is `$0` (a brand-new stack i
 
 ```bash
 # Run tests
-node --test tests/infracost.test.js
+npm test
 
 # Start HTTP microservice on port 4050
 npm start
 ```
+
+## API contract, CI & deploy
+
+- **Contract:** [`docs/api/openapi.json`](docs/api/openapi.json) (OpenAPI 3.1).
+  `tests/openapi-contract.test.js` fails when `ROUTES` in `src/server.js` and the spec disagree.
+- **Tests:** `npm test` — Node's built-in runner, no dependencies. CI runs it plus the
+  org security gate (gitleaks) on every pull request.
+- **Config:** every environment variable is listed in [`.env.example`](.env.example).
+- **Deploy:** `docker build -t infracost . && docker run -p 4050:4050 infracost` — `node:22-alpine`,
+  non-root, `HEALTHCHECK` on `GET /health`. The portfolio port map lives in
+  [`muntianus/architecture`](https://github.com/muntianus/architecture).
 
 ## Contact / Support
 
